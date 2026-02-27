@@ -5,103 +5,151 @@ function tuneHyperparameters()
     ix = randperm(length(trial));
 
     allTraining = trial(ix(1:50), :);
-    nFolds = 5;
+    nFolds = 3;
     foldSize = floor(size(allTraining, 1) / nFolds);
 
-    %% --- Phase 1: Tune training-time params (nPCs, lambda) ---
-    nPCs_grid = [10, 15, 20, 25, 30];
-    lambda_grid = [1e-4, 1e-3, 1e-2, 1e-1, 1];
+    %% --- Phase 1: Training-time params (sigma, nPCs, lambda, phaseSplit) ---
+    sigma_grid  = [0, 25, 50];
+    nPCs_grid   = [15, 20, 30];
+    lambda_grid = [1e-3, 1e-2, 1e-1];
+    phaseSplit_fixed = 9;
 
-    fprintf('=== Phase 1: Tuning nPCs and lambda ===\n');
+    fprintf('=== Phase 1: Tuning sigma, nPCs, lambda (3-fold CV) ===\n');
     bestRMSE1 = inf;
-    bestNPCs = 20;
-    bestLambda = 0.01;
+    bestSigma = 25; bestNPCs = 20; bestLambda = 0.01;
 
-    for pi = 1:length(nPCs_grid)
-        for li = 1:length(lambda_grid)
-            nPCs_try = nPCs_grid(pi);
-            lambda_try = lambda_grid(li);
+    for si = 1:length(sigma_grid)
+        for pi = 1:length(nPCs_grid)
+            for li = 1:length(lambda_grid)
+                hp.sigma = sigma_grid(si);
+                hp.nPCs  = nPCs_grid(pi);
+                hp.lambda = lambda_grid(li);
+                hp.phaseSplit = phaseSplit_fixed;
 
-            foldErrors = zeros(nFolds, 1);
-            for fold = 1:nFolds
-                valIdx = (fold-1)*foldSize+1 : fold*foldSize;
-                trainIdx = setdiff(1:size(allTraining,1), valIdx);
+                foldErrors = zeros(nFolds, 1);
+                for fold = 1:nFolds
+                    valIdx = (fold-1)*foldSize+1 : fold*foldSize;
+                    trainIdx = setdiff(1:size(allTraining,1), valIdx);
+                    params = trainWithParams(allTraining(trainIdx,:), hp);
+                    foldErrors(fold) = evaluateModel(allTraining(valIdx,:), params);
+                end
 
-                trainData = allTraining(trainIdx, :);
-                valData = allTraining(valIdx, :);
+                avgRMSE = mean(foldErrors);
+                fprintf('  sigma=%2d nPCs=%2d lambda=%.0e -> RMSE=%.4f\n', ...
+                    hp.sigma, hp.nPCs, hp.lambda, avgRMSE);
 
-                params = trainWithParams(trainData, nPCs_try, lambda_try);
-                foldErrors(fold) = evaluateModel(valData, params);
-            end
-
-            avgRMSE = mean(foldErrors);
-            fprintf('  nPCs=%2d  lambda=%.0e  -> RMSE=%.4f\n', ...
-                nPCs_try, lambda_try, avgRMSE);
-
-            if avgRMSE < bestRMSE1
-                bestRMSE1 = avgRMSE;
-                bestNPCs = nPCs_try;
-                bestLambda = lambda_try;
+                if avgRMSE < bestRMSE1
+                    bestRMSE1 = avgRMSE;
+                    bestSigma = hp.sigma;
+                    bestNPCs  = hp.nPCs;
+                    bestLambda = hp.lambda;
+                end
             end
         end
     end
-    fprintf('Best Phase 1: nPCs=%d, lambda=%.0e, RMSE=%.4f\n\n', ...
-        bestNPCs, bestLambda, bestRMSE1);
+    fprintf('Best Phase 1: sigma=%d, nPCs=%d, lambda=%.0e, RMSE=%.4f\n\n', ...
+        bestSigma, bestNPCs, bestLambda, bestRMSE1);
 
-    %% --- Phase 2: Tune prediction-time params (k, alpha, ensembleW) ---
-    k_grid = [3, 5, 7, 11];
-    alpha_grid = [0.3, 0.5, 0.7, 0.9];
-    ensW_grid = [0.3, 0.5, 0.7];
-
-    fprintf('=== Phase 2: Tuning k, alpha, ensembleW ===\n');
-    fprintf('(Using best nPCs=%d, lambda=%.0e from Phase 1)\n', bestNPCs, bestLambda);
+    %% --- Phase 2: phaseSplit (CV with best Phase 1 params) ---
+    phaseSplit_grid = [0, 7, 9, 12];
+    fprintf('=== Phase 2: Tuning phaseSplit (3-fold CV) ===\n');
+    bestPhaseSplit = 9;
     bestRMSE2 = inf;
-    bestK = 5;
-    bestAlpha = 0.5;
-    bestEnsW = 0.5;
 
-    % Train once with best training params on a single fold for speed
-    trainIdx = 1:40;
-    valIdx = 41:50;
-    trainData = allTraining(trainIdx, :);
-    valData = allTraining(valIdx, :);
-    baseParams = trainWithParams(trainData, bestNPCs, bestLambda);
+    for psi = 1:length(phaseSplit_grid)
+        hp.sigma = bestSigma;
+        hp.nPCs  = bestNPCs;
+        hp.lambda = bestLambda;
+        hp.phaseSplit = phaseSplit_grid(psi);
+
+        foldErrors = zeros(nFolds, 1);
+        for fold = 1:nFolds
+            valIdx = (fold-1)*foldSize+1 : fold*foldSize;
+            trainIdx = setdiff(1:size(allTraining,1), valIdx);
+            params = trainWithParams(allTraining(trainIdx,:), hp);
+            foldErrors(fold) = evaluateModel(allTraining(valIdx,:), params);
+        end
+
+        avgRMSE = mean(foldErrors);
+        fprintf('  phaseSplit=%2d -> RMSE=%.4f\n', hp.phaseSplit, avgRMSE);
+
+        if avgRMSE < bestRMSE2
+            bestRMSE2 = avgRMSE;
+            bestPhaseSplit = hp.phaseSplit;
+        end
+    end
+    fprintf('Best Phase 2: phaseSplit=%d, RMSE=%.4f\n\n', bestPhaseSplit, bestRMSE2);
+
+    %% --- Phase 3: Prediction-time params (single fold, fast) ---
+    k_grid        = [3, 5, 7, 11];
+    alphaMin_grid = [0.3, 0.4, 0.5];
+    alphaMax_grid = [0.75, 0.85, 0.95];
+    ensW_grid     = [0.3, 0.5, 0.7];
+    rampSteps_fixed = 15;
+
+    fprintf('=== Phase 3: Tuning k, alphaMin, alphaMax, ensembleW ===\n');
+    hp.sigma = bestSigma;
+    hp.nPCs  = bestNPCs;
+    hp.lambda = bestLambda;
+    hp.phaseSplit = bestPhaseSplit;
+
+    trainData = allTraining(1:40, :);
+    valData   = allTraining(41:end, :);
+    baseParams = trainWithParams(trainData, hp);
+
+    bestRMSE3 = inf;
+    bestK = 5; bestAlphaMin = 0.4; bestAlphaMax = 0.85; bestEnsW = 0.5;
 
     for ki = 1:length(k_grid)
-        for ai = 1:length(alpha_grid)
-            for ei = 1:length(ensW_grid)
-                params = baseParams;
-                params.kNN_k = k_grid(ki);
-                params.alpha = alpha_grid(ai);
-                params.ensembleW = ensW_grid(ei);
+        for ami = 1:length(alphaMin_grid)
+            for axi = 1:length(alphaMax_grid)
+                if alphaMax_grid(axi) <= alphaMin_grid(ami), continue; end
+                for ei = 1:length(ensW_grid)
+                    p = baseParams;
+                    p.kNN_k    = k_grid(ki);
+                    p.alphaMin = alphaMin_grid(ami);
+                    p.alphaMax = alphaMax_grid(axi);
+                    p.rampSteps = rampSteps_fixed;
+                    p.ensembleW = ensW_grid(ei);
 
-                rmse = evaluateModel(valData, params);
-                fprintf('  k=%2d  alpha=%.1f  ensW=%.1f  -> RMSE=%.4f\n', ...
-                    k_grid(ki), alpha_grid(ai), ensW_grid(ei), rmse);
+                    rmse = evaluateModel(valData, p);
+                    fprintf('  k=%2d aMin=%.1f aMax=%.2f ensW=%.1f -> RMSE=%.4f\n', ...
+                        k_grid(ki), alphaMin_grid(ami), alphaMax_grid(axi), ...
+                        ensW_grid(ei), rmse);
 
-                if rmse < bestRMSE2
-                    bestRMSE2 = rmse;
-                    bestK = k_grid(ki);
-                    bestAlpha = alpha_grid(ai);
-                    bestEnsW = ensW_grid(ei);
+                    if rmse < bestRMSE3
+                        bestRMSE3 = rmse;
+                        bestK = k_grid(ki);
+                        bestAlphaMin = alphaMin_grid(ami);
+                        bestAlphaMax = alphaMax_grid(axi);
+                        bestEnsW = ensW_grid(ei);
+                    end
                 end
             end
         end
     end
 
-    fprintf('\n========== BEST HYPERPARAMETERS ==========\n');
-    fprintf('  nPCs       = %d\n', bestNPCs);
-    fprintf('  lambda     = %.0e\n', bestLambda);
-    fprintf('  kNN_k      = %d\n', bestK);
-    fprintf('  alpha      = %.1f\n', bestAlpha);
-    fprintf('  ensembleW  = %.1f\n', bestEnsW);
-    fprintf('  Phase1 CV RMSE = %.4f\n', bestRMSE1);
-    fprintf('  Phase2 RMSE    = %.4f\n', bestRMSE2);
-    fprintf('==========================================\n');
+    fprintf('\n=============== BEST HYPERPARAMETERS ===============\n');
+    fprintf('  gaussSigma  = %d\n', bestSigma);
+    fprintf('  nPCs        = %d\n', bestNPCs);
+    fprintf('  lambda      = %.0e\n', bestLambda);
+    fprintf('  phaseSplit  = %d\n', bestPhaseSplit);
+    fprintf('  kNN_k       = %d\n', bestK);
+    fprintf('  alphaMin    = %.1f\n', bestAlphaMin);
+    fprintf('  alphaMax    = %.2f\n', bestAlphaMax);
+    fprintf('  rampSteps   = %d\n', rampSteps_fixed);
+    fprintf('  ensembleW   = %.1f\n', bestEnsW);
+    fprintf('  Phase1 CV RMSE  = %.4f\n', bestRMSE1);
+    fprintf('  Phase2 CV RMSE  = %.4f\n', bestRMSE2);
+    fprintf('  Phase3 RMSE     = %.4f\n', bestRMSE3);
+    fprintf('====================================================\n');
 end
 
 
-function params = trainWithParams(training_data, nPCs_target, lambda)
+%% ================================================================
+%  Training function (mirrors positionEstimatorTraining with all features)
+%  ================================================================
+function params = trainWithParams(training_data, hp)
     binSize = 20;
     nDirections = size(training_data, 2);
     nTrials = size(training_data, 1);
@@ -109,6 +157,24 @@ function params = trainWithParams(training_data, nPCs_target, lambda)
     classifyBins = 320 / binSize;
     nLags = 2;
 
+    sigma = hp.sigma;
+    lambda = hp.lambda;
+    nPCs_target = hp.nPCs;
+    phaseSplit = hp.phaseSplit;
+
+    % Gaussian kernel (sigma=0 means hard binning)
+    if sigma > 0
+        kernelHW = ceil(3 * sigma);
+        kernelX = -kernelHW:kernelHW;
+        gKernel = exp(-kernelX.^2 / (2 * sigma^2));
+        gKernel = gKernel / sum(gKernel);
+        useGauss = true;
+    else
+        gKernel = [];
+        useGauss = false;
+    end
+
+    %% Feature extraction
     allRates = [];
     trialRates = cell(nTrials, nDirections);
     trialHP = cell(nTrials, nDirections);
@@ -117,17 +183,30 @@ function params = trainWithParams(training_data, nPCs_target, lambda)
         for n = 1:nTrials
             spikes = training_data(n, k).spikes;
             T = size(spikes, 2);
-            nBins = floor(T / binSize);
-            rates = zeros(nNeurons, nBins);
-            for b = 1:nBins
-                rates(:, b) = sqrt(sum(spikes(:, (b-1)*binSize+1 : b*binSize), 2));
+
+            if useGauss
+                samplePts = binSize:binSize:T;
+                nBins = length(samplePts);
+                rates = zeros(nNeurons, nBins);
+                for i = 1:nNeurons
+                    smoothed = conv(spikes(i,:), gKernel, 'same');
+                    rates(i,:) = sqrt(smoothed(samplePts));
+                end
+            else
+                nBins = floor(T / binSize);
+                rates = zeros(nNeurons, nBins);
+                for b = 1:nBins
+                    rates(:, b) = sqrt(sum(spikes(:, (b-1)*binSize+1 : b*binSize), 2));
+                end
             end
+
             trialRates{n, k} = rates;
             trialHP{n, k} = training_data(n, k).handPos;
             allRates = [allRates, rates];
         end
     end
 
+    %% PCA
     mu = mean(allRates, 2);
     centered = allRates - mu;
     C = (centered * centered') / (size(centered, 2) - 1);
@@ -139,6 +218,7 @@ function params = trainWithParams(training_data, nPCs_target, lambda)
     nPCs = min(nPCs_target, size(V, 2));
     W_pca = V(:, 1:nPCs);
 
+    %% LDA + kNN
     nSamples = nTrials * nDirections;
     X_lda = zeros(nSamples, nPCs);
     labels = zeros(nSamples, 1);
@@ -179,43 +259,76 @@ function params = trainWithParams(training_data, nPCs_target, lambda)
     knnRef = X_lda * W_lda;
     knnLabels = labels;
 
-    featureDim = nPCs * (nLags + 1) + 1;
-    betaPos = cell(nDirections, 1);
-    betaVel = cell(nDirections, 1);
+    %% Per-direction, per-phase ridge regression with neural velocity
+    featureDim = nPCs * (nLags + 1) + nPCs + 1;
+    phaseBoundary = classifyBins + phaseSplit;
+
+    betaPosEarly = cell(nDirections, 1);
+    betaVelEarly = cell(nDirections, 1);
+    betaPosLate  = cell(nDirections, 1);
+    betaVelLate  = cell(nDirections, 1);
 
     for k = 1:nDirections
-        Xreg = [];
-        Ypos = [];
-        Yvel = [];
+        Xreg_e = []; Ypos_e = []; Yvel_e = [];
+        Xreg_l = []; Ypos_l = []; Yvel_l = [];
+
         for n = 1:nTrials
             rates = trialRates{n, k};
-            hp = trialHP{n, k};
+            hp_mat = trialHP{n, k};
             nBins = size(rates, 2);
             pc = W_pca' * (rates - mu);
             startBin = max(classifyBins, nLags + 1);
+
             for b = startBin:nBins
                 t = b * binSize;
-                if t > size(hp, 2), break; end
+                if t > size(hp_mat, 2), break; end
+
                 feat = zeros(featureDim, 1);
                 for lag = 0:nLags
                     feat(lag*nPCs+1 : (lag+1)*nPCs) = pc(:, b - lag);
                 end
+                dpcOff = nPCs * (nLags + 1);
+                if b >= 2
+                    feat(dpcOff+1 : dpcOff+nPCs) = pc(:, b) - pc(:, b-1);
+                end
                 feat(end) = 1;
-                posT = hp(1:2, t);
+
+                posT = hp_mat(1:2, t);
                 tPrev = (b - 1) * binSize;
                 if tPrev < 1, tPrev = 1; end
-                velT = hp(1:2, t) - hp(1:2, tPrev);
-                Xreg = [Xreg; feat'];
-                Ypos = [Ypos; posT'];
-                Yvel = [Yvel; velT'];
+                velT = hp_mat(1:2, t) - hp_mat(1:2, tPrev);
+
+                if phaseSplit == 0 || b <= phaseBoundary
+                    Xreg_e = [Xreg_e; feat'];
+                    Ypos_e = [Ypos_e; posT'];
+                    Yvel_e = [Yvel_e; velT'];
+                else
+                    Xreg_l = [Xreg_l; feat'];
+                    Ypos_l = [Ypos_l; posT'];
+                    Yvel_l = [Yvel_l; velT'];
+                end
             end
         end
-        XtX = Xreg' * Xreg;
+
+        % Early
+        XtX = Xreg_e' * Xreg_e;
         R = XtX + lambda * eye(featureDim);
-        betaPos{k} = R \ (Xreg' * Ypos);
-        betaVel{k} = R \ (Xreg' * Yvel);
+        betaPosEarly{k} = R \ (Xreg_e' * Ypos_e);
+        betaVelEarly{k} = R \ (Xreg_e' * Yvel_e);
+
+        % Late (fall back to early if no late data or phaseSplit=0)
+        if phaseSplit > 0 && size(Xreg_l, 1) > 0
+            XtX = Xreg_l' * Xreg_l;
+            R = XtX + lambda * eye(featureDim);
+            betaPosLate{k} = R \ (Xreg_l' * Ypos_l);
+            betaVelLate{k} = R \ (Xreg_l' * Yvel_l);
+        else
+            betaPosLate{k} = betaPosEarly{k};
+            betaVelLate{k} = betaVelEarly{k};
+        end
     end
 
+    %% Store params
     params.binSize = binSize;
     params.nPCs = nPCs;
     params.nLags = nLags;
@@ -224,17 +337,27 @@ function params = trainWithParams(training_data, nPCs_target, lambda)
     params.W_lda = W_lda;
     params.knnRef = knnRef;
     params.knnLabels = knnLabels;
-    params.betaPos = betaPos;
-    params.betaVel = betaVel;
+    params.betaPosEarly = betaPosEarly;
+    params.betaVelEarly = betaVelEarly;
+    params.betaPosLate  = betaPosLate;
+    params.betaVelLate  = betaVelLate;
     params.classifyBins = classifyBins;
     params.nDirections = nDirections;
-    params.alpha = 0.5;
+    params.phaseSplit = phaseSplit;
+    params.kernel = gKernel;
+    params.useGauss = useGauss;
     params.ensembleW = 0.5;
     params.kNN_k = 5;
+    params.alphaMin = 0.4;
+    params.alphaMax = 0.85;
+    params.rampSteps = 15;
     params.cachedWeights = [];
 end
 
 
+%% ================================================================
+%  Evaluate model RMSE on held-out data
+%  ================================================================
 function rmse = evaluateModel(testData, modelParameters)
     meanSqError = 0;
     nPredictions = 0;
@@ -267,6 +390,9 @@ function rmse = evaluateModel(testData, modelParameters)
 end
 
 
+%% ================================================================
+%  Local predictor (mirrors positionEstimator with all features)
+%  ================================================================
 function [x, y, newParams] = positionEstimatorLocal(test_data, params)
     newParams = params;
 
@@ -277,17 +403,28 @@ function [x, y, newParams] = positionEstimatorLocal(test_data, params)
     W_pca = params.W_pca;
     classifyBins = params.classifyBins;
     nDirections = params.nDirections;
-    alpha = params.alpha;
     ensW = params.ensembleW;
+    phaseSplit = params.phaseSplit;
 
     spikes = test_data.spikes;
     T = size(spikes, 2);
-    nBins = floor(T / binSize);
     nNeurons = size(spikes, 1);
 
-    rates = zeros(nNeurons, nBins);
-    for b = 1:nBins
-        rates(:, b) = sqrt(sum(spikes(:, (b-1)*binSize+1 : b*binSize), 2));
+    %% Feature extraction
+    if params.useGauss && ~isempty(params.kernel)
+        samplePts = binSize:binSize:T;
+        nBins = length(samplePts);
+        rates = zeros(nNeurons, nBins);
+        for i = 1:nNeurons
+            smoothed = conv(spikes(i,:), params.kernel, 'same');
+            rates(i,:) = sqrt(smoothed(samplePts));
+        end
+    else
+        nBins = floor(T / binSize);
+        rates = zeros(nNeurons, nBins);
+        for b = 1:nBins
+            rates(:, b) = sqrt(sum(spikes(:, (b-1)*binSize+1 : b*binSize), 2));
+        end
     end
 
     pc = W_pca' * (rates - mu);
@@ -315,8 +452,9 @@ function [x, y, newParams] = positionEstimatorLocal(test_data, params)
         w = params.cachedWeights;
     end
 
+    %% Feature vector with neural velocity
     currentBin = nBins;
-    featureDim = nPCs * (nLags + 1) + 1;
+    featureDim = nPCs * (nLags + 1) + nPCs + 1;
     feat = zeros(featureDim, 1);
     for lag = 0:nLags
         b = currentBin - lag;
@@ -324,7 +462,15 @@ function [x, y, newParams] = positionEstimatorLocal(test_data, params)
             feat(lag*nPCs+1 : (lag+1)*nPCs) = pc(:, b);
         end
     end
+    dpcOff = nPCs * (nLags + 1);
+    if currentBin >= 2
+        feat(dpcOff+1 : dpcOff+nPCs) = pc(:, currentBin) - pc(:, currentBin-1);
+    end
     feat(end) = 1;
+
+    %% Phase selection
+    phaseBoundary = classifyBins + phaseSplit;
+    useEarly = (phaseSplit == 0) || (currentBin <= phaseBoundary);
 
     if isempty(test_data.decodedHandPos)
         lastPos = test_data.startHandPos;
@@ -336,8 +482,13 @@ function [x, y, newParams] = positionEstimatorLocal(test_data, params)
     pVel = zeros(2, 1);
     for k = 1:nDirections
         if w(k) > 0
-            pPos = pPos + w(k) * (params.betaPos{k}' * feat);
-            pVel = pVel + w(k) * (params.betaVel{k}' * feat);
+            if useEarly
+                pPos = pPos + w(k) * (params.betaPosEarly{k}' * feat);
+                pVel = pVel + w(k) * (params.betaVelEarly{k}' * feat);
+            else
+                pPos = pPos + w(k) * (params.betaPosLate{k}' * feat);
+                pVel = pVel + w(k) * (params.betaVelLate{k}' * feat);
+            end
         end
     end
 
@@ -348,7 +499,13 @@ function [x, y, newParams] = positionEstimatorLocal(test_data, params)
         pred = ensW * pPos + (1 - ensW) * posFromVel;
     end
 
+    %% Adaptive smoothing
     if ~isNew
+        nDecoded = size(test_data.decodedHandPos, 2);
+        alphaMin = params.alphaMin;
+        alphaMax = params.alphaMax;
+        rampSteps = params.rampSteps;
+        alpha = alphaMin + (alphaMax - alphaMin) * min(nDecoded / rampSteps, 1);
         pred = alpha * pred + (1 - alpha) * lastPos;
     end
 
