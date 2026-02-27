@@ -2,30 +2,52 @@ function modelParameters = positionEstimatorTraining(training_data)
     binSize = 20;
     nDirections = size(training_data, 2);
     nTrials = size(training_data, 1);
-    nNeurons = size(training_data(1,1).spikes, 1);
+    nNeuronsRaw = size(training_data(1,1).spikes, 1);
     classifyBins = 320 / binSize;
     nLags = 2;
     lambda = 0.01;
+    gaussSigma = 25;
+    phaseSplit = 0;
+    lowFireThreshold = 0.02;
 
-    %% Feature extraction: 20ms binning + sqrt transform
-    allRates = [];
-    trialRates = cell(nTrials, nDirections);
+    %% Build Gaussian smoothing kernel
+    kernelHW = ceil(3 * gaussSigma);
+    kernelX = -kernelHW:kernelHW;
+    kernel = exp(-kernelX.^2 / (2 * gaussSigma^2));
+    kernel = kernel / sum(kernel);
+
+    %% Feature extraction: Gaussian smooth + sqrt + resample at 20ms
+    allRatesRaw = [];
+    trialRatesRaw = cell(nTrials, nDirections);
     trialHP = cell(nTrials, nDirections);
 
     for k = 1:nDirections
         for n = 1:nTrials
             spikes = training_data(n, k).spikes;
             T = size(spikes, 2);
-            nBins = floor(T / binSize);
+            samplePts = binSize:binSize:T;
+            nBins = length(samplePts);
 
-            rates = zeros(nNeurons, nBins);
-            for b = 1:nBins
-                rates(:, b) = sqrt(sum(spikes(:, (b-1)*binSize+1 : b*binSize), 2));
+            rates = zeros(nNeuronsRaw, nBins);
+            for i = 1:nNeuronsRaw
+                smoothed = conv(spikes(i,:), kernel, 'same');
+                rates(i,:) = sqrt(smoothed(samplePts));
             end
 
-            trialRates{n, k} = rates;
+            trialRatesRaw{n, k} = rates;
             trialHP{n, k} = training_data(n, k).handPos;
-            allRates = [allRates, rates];
+            allRatesRaw = [allRatesRaw, rates];
+        end
+    end
+
+    %% Remove low-firing neurons
+    meanRatePerNeuron = mean(allRatesRaw, 2);
+    keptNeurons = meanRatePerNeuron >= lowFireThreshold;
+    allRates = allRatesRaw(keptNeurons, :);
+    trialRates = cell(nTrials, nDirections);
+    for k = 1:nDirections
+        for n = 1:nTrials
+            trialRates{n, k} = trialRatesRaw{n, k}(keptNeurons, :);
         end
     end
 
@@ -45,7 +67,7 @@ function modelParameters = positionEstimatorTraining(training_data)
 
     W_pca = V(:, 1:nPCs);
 
-    %% LDA + kNN reference set
+    %% LDA + kNN reference set (mean over all bins)
     nSamples = nTrials * nDirections;
     X_lda = zeros(nSamples, nPCs);
     labels = zeros(nSamples, 1);
@@ -55,7 +77,7 @@ function modelParameters = positionEstimatorTraining(training_data)
         for n = 1:nTrials
             si = si + 1;
             rates = trialRates{n, k};
-            meanR = mean(rates(:, 1:classifyBins), 2);
+            meanR = mean(rates, 2);
             X_lda(si, :) = (W_pca' * (meanR - mu))';
             labels(si) = k;
         end
@@ -87,15 +109,20 @@ function modelParameters = positionEstimatorTraining(training_data)
     knnRef = X_lda * W_lda;
     knnLabels = labels;
 
-    %% Per-direction ridge regression (position + velocity targets)
-    featureDim = nPCs * (nLags + 1) + 1;
-    betaPos = cell(nDirections, 1);
-    betaVel = cell(nDirections, 1);
+    %% Per-direction ridge regression
+    % Feature: [pc_lag0; pc_lag1; pc_lag2; dpc_current; bias]
+    featureDim = nPCs * (nLags + 1) + nPCs + 1;
+
+    betaPosEarly = cell(nDirections, 1);
+    betaVelEarly = cell(nDirections, 1);
+    betaPosLate  = cell(nDirections, 1);
+    betaVelLate  = cell(nDirections, 1);
+
+    phaseBoundary = classifyBins + phaseSplit;
 
     for k = 1:nDirections
-        Xreg = [];
-        Ypos = [];
-        Yvel = [];
+        Xreg_e = []; Ypos_e = []; Yvel_e = [];
+        Xreg_l = []; Ypos_l = []; Yvel_l = [];
 
         for n = 1:nTrials
             rates = trialRates{n, k};
@@ -114,24 +141,43 @@ function modelParameters = positionEstimatorTraining(training_data)
                 for lag = 0:nLags
                     feat(lag*nPCs+1 : (lag+1)*nPCs) = pc(:, b - lag);
                 end
+                dpcOffset = nPCs * (nLags + 1);
+                if b >= 2
+                    feat(dpcOffset+1 : dpcOffset+nPCs) = pc(:, b) - pc(:, b-1);
+                end
                 feat(end) = 1;
 
                 posT = hp(1:2, t);
-
                 tPrev = (b - 1) * binSize;
                 if tPrev < 1, tPrev = 1; end
                 velT = hp(1:2, t) - hp(1:2, tPrev);
 
-                Xreg = [Xreg; feat'];
-                Ypos = [Ypos; posT'];
-                Yvel = [Yvel; velT'];
+                if phaseSplit == 0 || b <= phaseBoundary
+                    Xreg_e = [Xreg_e; feat'];
+                    Ypos_e = [Ypos_e; posT'];
+                    Yvel_e = [Yvel_e; velT'];
+                else
+                    Xreg_l = [Xreg_l; feat'];
+                    Ypos_l = [Ypos_l; posT'];
+                    Yvel_l = [Yvel_l; velT'];
+                end
             end
         end
 
-        XtX = Xreg' * Xreg;
+        XtX = Xreg_e' * Xreg_e;
         R = XtX + lambda * eye(featureDim);
-        betaPos{k} = R \ (Xreg' * Ypos);
-        betaVel{k} = R \ (Xreg' * Yvel);
+        betaPosEarly{k} = R \ (Xreg_e' * Ypos_e);
+        betaVelEarly{k} = R \ (Xreg_e' * Yvel_e);
+
+        if size(Xreg_l, 1) > 0
+            XtX = Xreg_l' * Xreg_l;
+            R = XtX + lambda * eye(featureDim);
+            betaPosLate{k} = R \ (Xreg_l' * Ypos_l);
+            betaVelLate{k} = R \ (Xreg_l' * Yvel_l);
+        else
+            betaPosLate{k} = betaPosEarly{k};
+            betaVelLate{k} = betaVelEarly{k};
+        end
     end
 
     %% Store all parameters
@@ -143,12 +189,18 @@ function modelParameters = positionEstimatorTraining(training_data)
     modelParameters.W_lda = W_lda;
     modelParameters.knnRef = knnRef;
     modelParameters.knnLabels = knnLabels;
-    modelParameters.betaPos = betaPos;
-    modelParameters.betaVel = betaVel;
+    modelParameters.keptNeurons = keptNeurons;
+    modelParameters.betaPosEarly = betaPosEarly;
+    modelParameters.betaVelEarly = betaVelEarly;
+    modelParameters.betaPosLate  = betaPosLate;
+    modelParameters.betaVelLate  = betaVelLate;
     modelParameters.classifyBins = classifyBins;
     modelParameters.nDirections = nDirections;
-    modelParameters.alpha = 0.5;
+    modelParameters.phaseSplit = phaseSplit;
+    modelParameters.kernel = kernel;
     modelParameters.ensembleW = 0.5;
     modelParameters.kNN_k = 5;
-    modelParameters.cachedWeights = [];
+    modelParameters.alphaMin = 0.4;
+    modelParameters.alphaMax = 0.85;
+    modelParameters.rampSteps = 15;
 end

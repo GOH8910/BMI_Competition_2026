@@ -12,6 +12,12 @@ close all; clear all
 
 load monkeydata_training.mat
 
+% Choose which estimator pair to test:
+%   'positionEstimatorTraining' / 'positionEstimator'
+%   'positionEstimatorTraining2' / 'positionEstimator2'
+trainFcn = 'positionEstimatorTraining6';
+estFcn = 'positionEstimator6';
+
 % Set random number generator
 rng(2013);
 ix = randperm(length(trial));
@@ -35,7 +41,7 @@ axis square
 grid
 
 % Train Model
-modelParameters = positionEstimatorTraining(trainingData)
+modelParameters = feval(trainFcn, trainingData)
 
 for tr=1:size(testData,1)
     display(['Decoding block ',num2str(tr),' out of ',num2str(size(testData,1))]);
@@ -51,11 +57,11 @@ for tr=1:size(testData,1)
             past_current_trial.decodedHandPos = decodedHandPos;
 
             past_current_trial.startHandPos = testData(tr,direc).handPos(1:2,1); 
-            if nargout('positionEstimator') == 3
-                [decodedPosX, decodedPosY, newParameters] = positionEstimator(past_current_trial, modelParameters);
+            if nargout(estFcn) == 3
+                [decodedPosX, decodedPosY, newParameters] = feval(estFcn, past_current_trial, modelParameters);
                 modelParameters = newParameters;
-            elseif nargout('positionEstimator') == 2
-                [decodedPosX, decodedPosY] = positionEstimator(past_current_trial, modelParameters{direc});
+            elseif nargout(estFcn) == 2
+                [decodedPosX, decodedPosY] = feval(estFcn, past_current_trial, modelParameters{direc});
             end
 %             display(decodedPosX)
 %             display(decodedPosY)
@@ -79,6 +85,7 @@ end
 legend('Decoded Position', 'Actual Position')
 
 RMSE = sqrt(meanSqError/n_predictions)
+RMSE_cm = RMSE / 10
 
 % Normalized RMSE (by range of actual positions)
 posRange = max(max(allActual,[],2) - min(allActual,[],2));
@@ -90,7 +97,7 @@ SS_tot = sum(sum((allActual - mean(allActual,2)).^2));
 R2 = 1 - SS_res / SS_tot
 
 fprintf('\n--- Results ---\n')
-fprintf('RMSE:  %.4f\n', RMSE)
+fprintf('RMSE:  %.4f mm (%.4f cm)\n', RMSE, RMSE_cm)
 fprintf('NRMSE: %.4f (%.1f%% of workspace range)\n', NRMSE, NRMSE*100)
 fprintf('R²:    %.4f\n', R2)
 
