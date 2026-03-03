@@ -15,8 +15,8 @@ load monkeydata_training.mat
 % Choose which estimator pair to test:
 %   'positionEstimatorTraining' / 'positionEstimator'
 %   'positionEstimatorTraining2' / 'positionEstimator2'
-trainFcn = 'positionEstimatorTraining6';
-estFcn = 'positionEstimator6';
+trainFcn = 'positionEstimatorTrainingpro';
+estFcn = 'positionEstimatorpro';
 
 % Set random number generator
 rng(2013);
@@ -29,6 +29,7 @@ trainingData = trial(ix(1:50),:);
 testData = trial(ix(51:end),:);
 
 fprintf('Testing the continuous position estimator...')
+runStart = tic;
 
 meanSqError = 0;
 n_predictions = 0;  
@@ -100,6 +101,7 @@ fprintf('\n--- Results ---\n')
 fprintf('RMSE:  %.4f mm (%.4f cm)\n', RMSE, RMSE_cm)
 fprintf('NRMSE: %.4f (%.1f%% of workspace range)\n', NRMSE, NRMSE*100)
 fprintf('R²:    %.4f\n', R2)
+fprintf('Elapsed Time: %.3f s\n', toc(runStart))
 
 % rmpath(genpath(teamName))
 
