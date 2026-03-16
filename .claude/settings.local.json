@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(matlab:*)",
+      "Read(//Applications/**)",
+      "Read(//usr/local/bin/**)",
+      "Bash(/Applications/MATLAB_R2024b.app/bin/matlab -nodisplay -nosplash -r \"testFunction_for_students_MTb; exit\" 2>&1 | grep -E \"RMSE:|R2:|NRMSE:\")",
+      "Bash(/Applications/MATLAB_R2024b.app/bin/matlab -nodisplay -nosplash -r \"testFunction_for_students_MTb; exit\" 2>&1 | grep -E \"RMSE:|R2:|NRMSE:|Elapsed\")",
+      "Bash(which matlab:*)",
+      "Bash(/Applications/MATLAB_R2024b.app/bin/matlab -nodisplay -nosplash -r \"testFunction_for_students_MTb; exit\" 2>&1 | grep -E \"RMSE|Error|error|warning\" | tail -20)",
+      "Bash(/Applications/MATLAB_R2024b.app/bin/matlab -nodisplay -nosplash -r \"testFunction_for_students_MTb; exit\" 2>&1 | grep -E \"RMSE|Error|error|Kalman\" | tail -20)",
+      "Bash(/Applications/MATLAB_R2024b.app/bin/matlab -nodisplay -nosplash -r \"testFunction_for_students_MTb; exit\" 2>&1 | grep -E \"RMSE\" | tail -5)",
+      "Bash(/Applications/MATLAB_R2024b.app/bin/matlab *)",
+      "Bash(/Applications/MATLAB_R2024b.app/bin/matlab -nodisplay -nosplash -r \"testFunction_for_students_MTb; exit\" 2>&1 | tail -10)",
+      "Bash(/Applications/MATLAB_R2024b.app/bin/matlab -nodisplay -nosplash -r \"testFunction_for_students_MTb; exit\" 2>&1 | tail -15)",
+      "Bash(/Applications/MATLAB_R2024b.app/bin/matlab -nodisplay -nosplash -r \"testFunction_for_students_MTb; exit\" 2>&1 | grep -E \"RMSE|Error\" | tail -10)"
+    ]
+  }
+}
