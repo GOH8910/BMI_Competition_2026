@@ -15,8 +15,8 @@ load monkeydata_training.mat
 % Choose which estimator pair to test:
 %   'positionEstimatorTraining' / 'positionEstimator'
 %   'positionEstimatorTraining2' / 'positionEstimator2'
-trainFcn = 'positionEstimatorTrainingpro';
-estFcn = 'positionEstimatorpro';
+trainFcn = 'positionEstimatorTraining8';
+estFcn = 'positionEstimator8';
 
 % Set random number generator
 rng(2013);
