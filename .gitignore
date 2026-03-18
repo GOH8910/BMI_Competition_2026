@@ -1,3 +1,6 @@
 Trial*
 *.pdf
 *.html
+CLAUDE.md
+.DS_Store
+monkeydata_training.mat

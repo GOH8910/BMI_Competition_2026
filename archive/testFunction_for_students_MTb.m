@@ -15,6 +15,7 @@ load monkeydata_training.mat
 % Choose which estimator pair to test:
 %   'positionEstimatorTraining' / 'positionEstimator'
 %   'positionEstimatorTraining2' / 'positionEstimator2'
+addpath('Bio Medical Ingineers');
 trainFcn = 'positionEstimatorTraining8';
 estFcn = 'positionEstimator8';
 

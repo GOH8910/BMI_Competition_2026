@@ -1,27 +1,3 @@
-%%% Model 4: Full V11 Hybrid Decoder
-%%%   LDA + Adaptive KNN + PCA Regression + Ridge + Per-Direction Hyperparams
-%%% BMI Spring 2025
-
-% function modelParameters = positionEstimatorTraining(training_data)
-%
-% Full pipeline:
-%   1. Per-window regularised LDA classifiers (one per 80 ms window)
-%   2. Average trajectories per direction (absolute + displacement)
-%   3. Adaptive kernel-PCA + ridge regression (separate model per window count)
-%   4. Per-direction ridge regression with time-varying causal features
-%   5. KNN data store (spike features + trajectories per direction)
-%   6. Per-direction hyperparameters (K, pcaWeight, ridgeAlpha) based on
-%      trajectory variability ("difficulty") of each direction
-%
-% Arguments:
-%   training_data(n,k)              n = trial index, k = reaching direction
-%   training_data(n,k).trialId      unique trial number
-%   training_data(n,k).spikes(i,t)  i = neuron, t = time (ms)
-%   training_data(n,k).handPos(d,t) d = dimension [1-3], t = time (ms)
-%
-% Return Value:
-%   modelParameters  struct with all learned parameters for positionEstimator
-
 function modelParameters = positionEstimatorTraining8(training_data)
 
     [nTrials, nDirs] = size(training_data);

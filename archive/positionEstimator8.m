@@ -1,31 +1,3 @@
-%%% Model 4: Full V11 Hybrid Decoder
-%%%   LDA + Adaptive KNN + PCA Regression + Ridge + Per-Direction Hyperparams
-%%% BMI Spring 2025
-
-% function [x, y] = positionEstimator(test_data, modelParameters)
-%
-% Full hybrid decoder — strictly causal: only spike data up to and
-% including the current timestep T is used.  No position input of any kind
-% (no startHandPos, no decodedHandPos, no EMA feedback).
-%
-% Inference pipeline:
-%   1. Temperature-scaled soft LDA classification -> P(k) over 8 directions
-%   2. KNN trajectory retrieval for the best-classified direction
-%      (looks up absolute training trajectories — not the current test position)
-%   3. Soft-weighted PCA regression, KNN trajectory, and ridge predictions
-%      (PCA and ridge trained to predict absolute position from neural features)
-%   4. Three-way blend with per-direction adaptive weights
-%
-% Arguments:
-%   test_data.trialId          unique trial ID
-%   test_data.startHandPos     2x1 hand position at trial start  [not used]
-%   test_data.decodedHandPos   2xN previously decoded positions  [not used]
-%   test_data.spikes(i,t)      spike trains from t=1 to current time T
-%   modelParameters            struct returned by positionEstimatorTraining
-%
-% Return Values:
-%   x, y   decoded hand position (mm)
-
 function [x, y, newModelParameters] = positionEstimator8(test_data, modelParameters)
 
     newModelParameters = modelParameters;
@@ -48,11 +20,18 @@ function [x, y, newModelParameters] = positionEstimator8(test_data, modelParamet
     % ----------------------------------------------------------------
     nAvailWin = min(floor(T / wLen), maxNWin);
 
+    % Precompute sqrt spike count per neuron for each 80ms window once.
+    % Reused in LDA (below), testFeat (Step 3), removing 3x redundant passes over sp.
+    winFeats = zeros(nN, maxNWin);
+    for w = 1:nAvailWin
+        ts = (w-1)*wLen + 1;
+        te =  w   *wLen;
+        winFeats(:, w) = sqrt(sum(sp(:, ts:te), 2));
+    end
+
     logP = zeros(1, nDirs);
     for w = 1:nAvailWin
-        ts   = (w-1)*wLen + 1;
-        te   =  w   *wLen;
-        feat = sqrt(sum(sp(:, ts:te), 2))';
+        feat = winFeats(:, w)';   % reuse precomputed features — no recomputation
 
         for k = 1:nDirs
             d       = feat - modelParameters.winLDA(w).dirMeans(k,:);
@@ -81,15 +60,8 @@ function [x, y, newModelParameters] = positionEstimator8(test_data, modelParamet
     nFeatWin = max(4, nAvailWin);
     nFeatWin = min(nFeatWin, maxNWin);
 
-    testFeat = zeros(1, nN * nFeatWin);
-    for w = 1:nFeatWin
-        ts = (w-1)*wLen + 1;
-        te =  w   *wLen;
-        testFeat((w-1)*nN+1 : w*nN) = sqrt(sum(sp(:, ts:te), 2))';
-    end
-
-    % startPos is used in KNN distance, displacement predictions, and ridge features
-    startPos = test_data.startHandPos(1:2);
+    % Flatten precomputed winFeats columns into a row vector — no recomputation needed
+    testFeat = reshape(winFeats(:, 1:nFeatWin), 1, nN * nFeatWin);
 
     % ----------------------------------------------------------------
     % STEP 4: KNN trajectory for best-classified direction
@@ -129,8 +101,8 @@ function [x, y, newModelParameters] = positionEstimator8(test_data, modelParamet
     % Ridge feature vector (causal: data up to T only)
     fi  = testFeat(1 : 4*nN);
     t_s = max(1, T - 79);
-    fc  = sqrt(sum(sp(:, t_s:T), 2))';
-    fcu = sqrt(sum(sp(:, 1:T), 2))' / sqrt(T / 80);
+    fc  = sqrt(sum(sp(:, t_s:T), 2))';             % non-aligned window — must recompute from sp
+    fcu = sqrt(sum(sp(:, 1:T), 2))' / sqrt(T / 80); % cumulative over full [1,T] incl. partial window — must recompute from sp
     startHandPos2 = test_data.startHandPos(1:2)';   % 1x2
     ridgeFeat = [fi, fc, fcu, T/800, startHandPos2];
 
